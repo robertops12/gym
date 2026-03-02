@@ -1,148 +1,346 @@
-from flask import Flask, request, render_template_string
+import sqlite3
+import json
+from flask import Flask, request, render_template_string, redirect, url_for
+from datetime import datetime
 
 app = Flask(__name__)
 
-# Esta lista guardará los datos de todos los amigos
-amigos = []
+# --- INICIALIZACIÓN DE LA BASE DE DATOS ---
+def init_db():
+    conn = sqlite3.connect('gym_roberto.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS ejercicios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sesion TEXT,
+            musculo TEXT,
+            nombre TEXT,
+            series INTEGER
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS registros (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha TEXT,
+            ejercicio_id INTEGER,
+            serie INTEGER,
+            kg REAL,
+            reps INTEGER,
+            rir INTEGER
+        )
+    ''')
+    
+    c.execute('SELECT COUNT(*) FROM ejercicios')
+    if c.fetchone()[0] == 0:
+        ejercicios = [
+            ('EMPUJE', 'PECTORAL', 'Press banca con barra', 3),
+            ('EMPUJE', 'PECTORAL', 'Press banca inclinado en multipower', 3),
+            ('EMPUJE', 'PECTORAL', 'Cruce de polea ascendente parado', 3),
+            ('EMPUJE', 'DELTOIDES LATERAL', 'Elevaciones laterales en maquina', 3),
+            ('EMPUJE', 'DELTOIDES LATERAL', 'Elevaciones laterales en polea', 3),
+            ('EMPUJE', 'TRICEPS', 'Extensión de tríceps en polea alta', 3),
+            ('EMPUJE', 'TRICEPS', 'Triceps katana', 3),
+            ('TIRON', 'ESPALDA', 'Jalon al pecho agarre prono', 3),
+            ('TIRON', 'ESPALDA', 'Remo sentado agarre prono', 3),
+            ('TIRON', 'ESPALDA', 'Remo dorian', 3),
+            ('TIRON', 'ESPALDA', 'Jalón al pecho agarre neutro', 3),
+            ('TIRON', 'DELTOIDES POSTERIOR', 'Peck deck inverso', 3),
+            ('TIRON', 'BICEPS', 'Curl de bíceps con mancuernas', 3),
+            ('TIRON', 'BICEPS', 'Curl con barra', 3),
+            ('PIERNA', 'ADUCTORES', 'Aductores en maquina', 3),
+            ('PIERNA', 'CUADRICEPS', 'Prensa', 3),
+            ('PIERNA', 'GLUTEOS', 'Hip thrust', 3),
+            ('PIERNA', 'ISQUIOS', 'Curl de isquios sentado', 3),
+            ('PIERNA', 'CUADRICEPS', 'Extension de cuadriceps', 3),
+            ('PIERNA', 'ISQUIOS', 'Curl de isquios tumbado', 3),
+            ('PIERNA', 'GEMELOS', 'Gemelos', 4),
+            ('TORSO', 'PECTORAL', 'Press banca inclinado con mancuernas', 3),
+            ('TORSO', 'PECTORAL', 'Press de pecho en maquina horizontal', 3),
+            ('TORSO', 'ESPALDA', 'Remo en T', 3),
+            ('TORSO', 'ESPALDA', 'Jalon al pecho agarre supino', 3),
+            ('TORSO', 'DELTOIDES ANTERIOR', 'Press militar en multipower', 3),
+            ('TORSO', 'DELTOIDES LATERAL', 'Elevaciones laterales en maquina', 3),
+            ('TORSO', 'BICEPS', 'Curl con banco inclinado', 3),
+            ('TORSO', 'TRICEPS', 'Extensión de tríceps unilateral', 3),
+            ('ABDOMEN', 'ABDOMEN', 'Encogimientos en polea alta', 4),
+            ('ABDOMEN', 'ABDOMEN', 'Elevaciones de pierna colgado', 4),
+            ('ABDOMEN', 'ABDOMEN', 'Crunch abdominal en banco inclinado', 4)
+        ]
+        c.executemany('INSERT INTO ejercicios (sesion, musculo, nombre, series) VALUES (?, ?, ?, ?)', ejercicios)
+        
+    conn.commit()
+    conn.close()
 
-# Diseño de la aplicación (Modo noche / Fiesta)
-HTML = """
+init_db()
+
+def get_db():
+    conn = sqlite3.connect('gym_roberto.db')
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# --- DISEÑO ---
+BASE_HTML = """
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nivel de Fiesta de los Colegas 🍻</title>
+    <title>Gym Tracker Pro</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: Arial, sans-serif; background-color: #1e1e2f; color: white; text-align: center; padding: 20px; }
-        .container { background: #2a2a40; max-width: 500px; margin: auto; padding: 20px; border-radius: 10px; box-shadow: 0px 4px 10px rgba(0,0,0,0.5); }
-        input, select, button { width: 90%; margin: 10px 0; padding: 10px; border-radius: 5px; border: none; font-size: 16px; box-sizing: border-box; }
-        input, select { background-color: #3e3e5c; color: white; }
-        button { background-color: #2ed573; color: white; font-weight: bold; cursor: pointer; margin-top: 15px; }
-        button:hover { background-color: #26b360; }
+        :root {
+            --bg-color: #121212; --card-bg: #1e1e1e; --input-bg: #2c2c2c;
+            --text-main: #ffffff; --text-muted: #aaaaaa;
+            --accent: #ff4757; --success: #2ed573; --primary: #1e90ff; --warning: #ffa502;
+        }
+        body { font-family: -apple-system, sans-serif; background-color: var(--bg-color); color: var(--text-main); margin: 0; padding: 15px; }
+        .container { max-width: 600px; margin: auto; padding-bottom: 80px; }
         
-        .btn-borrar { background-color: #ff4757; }
-        .btn-borrar:hover { background-color: #ff6b81; }
+        .header { text-align: center; margin-bottom: 25px; }
+        .header h1 { margin: 0; color: var(--primary); }
+        .header p { color: var(--text-muted); margin-top: 5px; font-size: 14px; }
 
-        .lista-amigos { margin-top: 30px; text-align: left; }
-        .amigo-card { background: #3e3e5c; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 6px solid #ccc; }
+        .btn-sesion { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 18px; margin-bottom: 12px; border-radius: 12px; background: var(--card-bg); border: 1px solid #333; color: white; font-size: 18px; font-weight: bold; text-decoration: none; box-sizing: border-box; }
+        .btn-sesion.progreso { border-color: var(--warning); color: var(--warning); background: rgba(255, 165, 2, 0.1); margin-top: 30px; }
         
-        .estado-Sobrio { border-color: #2ed573; }
-        .estado-Puntillo { border-color: #1e90ff; }
-        .estado-Borracho { border-color: #ffa502; }
-        .estado-Ebrio { border-color: #ff4757; }
+        .card-ejercicio { background: var(--card-bg); border-radius: 12px; padding: 15px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.4); border-left: 4px solid var(--primary); }
+        .ejercicio-titulo { font-size: 18px; font-weight: bold; margin-bottom: 5px; color: white; text-decoration: none; display: block; }
+        .ejercicio-musculo { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 15px; }
         
-        h3 { border-bottom: 1px solid #555; padding-bottom: 10px; }
-        .zona-reset { margin-top: 40px; padding: 15px; background-color: #222233; border-radius: 8px; border: 1px dashed #555; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+        th { color: var(--text-muted); font-size: 12px; text-align: center; padding-bottom: 8px; font-weight: normal; }
+        td { padding: 4px; text-align: center; }
+        
+        input[type="number"] { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #444; background: var(--input-bg); color: white; text-align: center; font-size: 16px; box-sizing: border-box; }
+        
+        .btn-guardar { width: 100%; padding: 15px; border-radius: 12px; border: none; background: var(--success); color: white; font-size: 18px; font-weight: bold; cursor: pointer; position: fixed; bottom: 15px; left: 50%; transform: translateX(-50%); max-width: 570px; box-shadow: 0 4px 10px rgba(46, 213, 115, 0.4); }
+        .btn-volver { display: inline-block; margin-bottom: 20px; color: var(--text-muted); text-decoration: none; }
+        
+        .ultimo-registro { font-size: 11px; color: var(--success); text-align: left; padding-left: 10px; margin-top: -5px; margin-bottom: 10px; display: block; }
+        
+        /* Estilos para el menú de progreso */
+        .grupo-musculo { margin-top: 20px; color: var(--primary); font-size: 14px; text-transform: uppercase; border-bottom: 1px solid #333; padding-bottom: 5px; }
+        .link-progreso { display: block; padding: 12px; background: var(--card-bg); border-radius: 8px; margin-top: 8px; color: white; text-decoration: none; font-size: 15px; }
+        .link-progreso:hover { background: #2c2c2c; }
+        
+        canvas { background: var(--card-bg); padding: 10px; border-radius: 10px; margin-top: 20px; }
     </style>
 </head>
-<body>
-
-<div class="container">
-    <h2>Muro de la Fiesta 🍻</h2>
-    <p>Apunta lo que llevas y elige tu estado.</p>
-
-    <form method="POST">
-        <input type="hidden" name="accion" value="actualizar">
-        
-        <label>Tu Nombre:</label>
-        <input type="text" name="nombre" required placeholder="Ej. Juan">
-
-        <label>🍺 Cervezas:</label>
-        <input type="number" name="cervezas" value="0" min="0">
-
-        <label>🍹 Cubatas:</label>
-        <input type="number" name="cubatas" value="0" min="0">
-
-        <label>🥃 Chupitos:</label>
-        <input type="number" name="chupitos" value="0" min="0">
-
-        <label>¿Cómo te sientes ahora mismo?:</label>
-        <select name="estado">
-            <option value="Sobrio">Fresquísimo / Sobrio 💧</option>
-            <option value="Puntillo">Con el puntillo alegre 🕺</option>
-            <option value="Borracho">Borracho / Perdiendo los papeles 🥴</option>
-            <option value="Ebrio">Ebrio Extremo / En la miseria 💀</option>
-        </select>
-
-        <button type="submit">¡Actualizar mi estado!</button>
-    </form>
-
-    <div class="lista-amigos">
-        <h3>Niveles de la gente:</h3>
-        {% if amigos|length == 0 %}
-            <p style="text-align: center; color: #aaa;">Aún nadie ha apuntado nada. ¡Sé el primero!</p>
-        {% else %}
-            {% for amigo in amigos %}
-            <div class="amigo-card estado-{{ amigo.estado }}">
-                <strong style="font-size: 1.2em;">{{ amigo.nombre }}</strong> se siente <em>{{ amigo.estado }}</em><br>
-                <span style="color: #bbb; font-size: 0.9em;">Ha bebido: {{ amigo.cervezas }} 🍺 | {{ amigo.cubatas }} 🍹 | {{ amigo.chupitos }} 🥃</span>
-            </div>
-            {% endfor %}
-        {% endif %}
-    </div>
-
-    <div class="zona-reset">
-        <h4>Resetear la Fiesta 🧹</h4>
-        <form method="POST" style="display: flex; flex-direction: column; align-items: center;">
-            <input type="hidden" name="accion" value="resetear">
-            <input type="password" name="password" placeholder="Contraseña..." required style="width: 80%;">
-            <button type="submit" class="btn-borrar" style="width: 80%;">Borrar Lista</button>
-        </form>
-        {% if error %}
-            <p style="color: #ff4757; font-size: 14px; margin-top: 10px;">{{ error }}</p>
-        {% endif %}
-    </div>
-</div>
-
-</body>
-</html>
 """
 
-@app.route('/', methods=['GET', 'POST'])
+# --- RUTAS DE LA APP ---
+
+@app.route('/')
 def index():
-    mensaje_error = ""
+    html = BASE_HTML + """
+    <body>
+    <div class="container">
+        <div class="header">
+            <h1>Gym Tracker 🏋️‍♂️</h1>
+            <p>Programa de Roberto Priego</p>
+        </div>
+        <a href="/sesion/EMPUJE" class="btn-sesion"><span>💪 EMPUJE</span> <span>➔</span></a>
+        <a href="/sesion/TIRON" class="btn-sesion"><span>🔙 TIRON</span> <span>➔</span></a>
+        <a href="/sesion/PIERNA" class="btn-sesion"><span>🦵 PIERNA</span> <span>➔</span></a>
+        <a href="/sesion/TORSO" class="btn-sesion"><span>🦍 TORSO</span> <span>➔</span></a>
+        <a href="/sesion/ABDOMEN" class="btn-sesion"><span>🍫 ABDOMEN</span> <span>➔</span></a>
+        
+        <a href="/lista_progresos" class="btn-sesion progreso"><span>📈 VER PROGRESIONES</span> <span>➔</span></a>
+    </div>
+    </body></html>
+    """
+    return render_template_string(html)
 
-    if request.method == 'POST':
-        accion = request.form.get('accion')
-
-        # Si el usuario le ha dado al botón de Resetear
-        if accion == 'resetear':
-            password = request.form.get('password')
-            # AQUÍ PUEDES CAMBIAR LA CONTRASEÑA
-            if password == '1234':
-                amigos.clear()
-            else:
-                mensaje_error = "Contraseña incorrecta ❌"
-
-        # Si el usuario está añadiendo sus datos
-        elif accion == 'actualizar':
-            nombre = request.form.get('nombre')
-            cervezas = int(request.form.get('cervezas', 0))
-            cubatas = int(request.form.get('cubatas', 0))
-            chupitos = int(request.form.get('chupitos', 0))
-            estado = request.form.get('estado')
-
-            encontrado = False
-            for amigo in amigos:
-                if amigo['nombre'].lower() == nombre.lower():
-                    amigo['cervezas'] = cervezas
-                    amigo['cubatas'] = cubatas
-                    amigo['chupitos'] = chupitos
-                    amigo['estado'] = estado
-                    encontrado = True
-                    break
+@app.route('/sesion/<nombre>')
+def sesion(nombre):
+    conn = get_db()
+    ejercicios = conn.execute('SELECT * FROM ejercicios WHERE sesion = ?', (nombre,)).fetchall()
+    
+    ultimos_registros = {}
+    for ej in ejercicios:
+        regs = conn.execute('SELECT serie, kg, reps FROM registros WHERE ejercicio_id = ? ORDER BY id DESC LIMIT ?', (ej['id'], ej['series'])).fetchall()
+        if regs:
+            # Los ordenamos para que coincidan con la serie exacta (1, 2, 3...)
+            regs_ordenados = sorted(regs, key=lambda x: x['serie'])
+            ultimos_registros[ej['id']] = {r['serie']: f"{r['kg']}kg x {r['reps']} reps" for r in regs_ordenados}
             
-            if not encontrado:
-                amigos.append({
-                    'nombre': nombre,
-                    'cervezas': cervezas,
-                    'cubatas': cubatas,
-                    'chupitos': chupitos,
-                    'estado': estado
-                })
+    conn.close()
+    
+    html = BASE_HTML + """
+    <body>
+    <div class="container">
+        <a href="/" class="btn-volver">← Volver al inicio</a>
+        <div class="header">
+            <h1>{{ nombre }}</h1>
+            <p>Registra tus marcas de hoy</p>
+        </div>
+        
+        <form method="POST" action="/guardar/{{ nombre }}">
+            {% for ej in ejercicios %}
+            <div class="card-ejercicio">
+                <a href="/progreso/{{ ej['id'] }}" class="ejercicio-titulo">{{ ej['nombre'] }} 📈</a>
+                <div class="ejercicio-musculo">{{ ej['musculo'] }}</div>
+                
+                <table>
+                    <tr><th>Serie</th><th>KG</th><th>Reps</th><th>RIR</th></tr>
+                    {% for i in range(1, ej['series'] + 1) %}
+                    <tr>
+                        <td style="color: #aaa; font-weight: bold;">{{ i }}</td>
+                        <td><input type="number" step="0.25" name="kg_{{ ej['id'] }}_{{ i }}"></td>
+                        <td><input type="number" name="reps_{{ ej['id'] }}_{{ i }}"></td>
+                        <td><input type="number" name="rir_{{ ej['id'] }}_{{ i }}"></td>
+                    </tr>
+                    {% if ultimos_registros.get(ej['id']) and ultimos_registros[ej['id']].get(i) %}
+                    <tr>
+                        <td></td>
+                        <td colspan="3"><span class="ultimo-registro">Última: {{ ultimos_registros[ej['id']][i] }}</span></td>
+                    </tr>
+                    {% endif %}
+                    {% endfor %}
+                </table>
+            </div>
+            {% endfor %}
+            <button type="submit" class="btn-guardar">💾 Guardar Entrenamiento</button>
+        </form>
+    </div>
+    </body></html>
+    """
+    return render_template_string(html, nombre=nombre, ejercicios=ejercicios, ultimos_registros=ultimos_registros)
 
-    return render_template_string(HTML, amigos=amigos, error=mensaje_error)
+@app.route('/guardar/<sesion_nombre>', methods=['POST'])
+def guardar(sesion_nombre):
+    conn = get_db()
+    fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
+    ejercicios = conn.execute('SELECT * FROM ejercicios WHERE sesion = ?', (sesion_nombre,)).fetchall()
+    
+    for ej in ejercicios:
+        for i in range(1, ej['series'] + 1):
+            kg = request.form.get(f"kg_{ej['id']}_{i}")
+            reps = request.form.get(f"reps_{ej['id']}_{i}")
+            rir = request.form.get(f"rir_{ej['id']}_{i}")
+            
+            if kg and reps:
+                conn.execute('''
+                    INSERT INTO registros (fecha, ejercicio_id, serie, kg, reps, rir)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (fecha_actual, ej['id'], i, float(kg), int(reps), int(rir) if rir else 0))
+                
+    conn.commit()
+    conn.close()
+    return redirect(url_for('index'))
+
+# --- NUEVAS RUTAS DE PROGRESIÓN ---
+
+@app.route('/lista_progresos')
+def lista_progresos():
+    conn = get_db()
+    ejercicios = conn.execute('SELECT * FROM ejercicios ORDER BY sesion, nombre').fetchall()
+    conn.close()
+    
+    # Agrupamos los ejercicios por sesión para el menú
+    agrupados = {}
+    for ej in ejercicios:
+        if ej['sesion'] not in agrupados:
+            agrupados[ej['sesion']] = []
+        agrupados[ej['sesion']].append(ej)
+        
+    html = BASE_HTML + """
+    <body>
+    <div class="container">
+        <a href="/" class="btn-volver">← Volver al inicio</a>
+        <div class="header">
+            <h1 style="color: var(--warning);">Tus Progresiones</h1>
+            <p>Selecciona un ejercicio para ver tu gráfica</p>
+        </div>
+        
+        {% for sesion, lista in agrupados.items() %}
+            <div class="grupo-musculo">{{ sesion }}</div>
+            {% for ej in lista %}
+                <a href="/progreso/{{ ej['id'] }}" class="link-progreso">{{ ej['nombre'] }} <span style="float:right;">📈</span></a>
+            {% endfor %}
+        {% endfor %}
+    </div>
+    </body></html>
+    """
+    return render_template_string(html, agrupados=agrupados)
+
+@app.route('/progreso/<int:ejercicio_id>')
+def ver_progreso(ejercicio_id):
+    conn = get_db()
+    ejercicio = conn.execute('SELECT nombre, musculo FROM ejercicios WHERE id = ?', (ejercicio_id,)).fetchone()
+    
+    # Buscamos el peso MÁXIMO levantado cada día (agrupado por fecha)
+    # substr(fecha, 1, 10) extrae solo el 'YYYY-MM-DD' descartando la hora
+    historial = conn.execute('''
+        SELECT substr(fecha, 1, 10) as dia, MAX(kg) as peso_maximo
+        FROM registros
+        WHERE ejercicio_id = ? AND kg > 0
+        GROUP BY dia
+        ORDER BY dia ASC
+    ''', (ejercicio_id,)).fetchall()
+    conn.close()
+    
+    fechas = [fila['dia'] for fila in historial]
+    pesos = [fila['peso_maximo'] for fila in historial]
+    
+    html = BASE_HTML + """
+    <body>
+    <div class="container">
+        <a href="javascript:history.back()" class="btn-volver">← Volver</a>
+        <div class="header">
+            <h1 style="font-size: 22px; color: var(--primary);">{{ ejercicio['nombre'] }}</h1>
+            <p>Evolución de Peso Máximo (KG)</p>
+        </div>
+        
+        {% if fechas|length < 2 %}
+            <div style="text-align:center; margin-top: 50px; color: var(--text-muted);">
+                <p>🏋️‍♂️</p>
+                <p>Necesitas registrar este ejercicio al menos 2 días diferentes para ver tu gráfica de progreso.</p>
+            </div>
+        {% else %}
+            <canvas id="graficoProgreso"></canvas>
+            
+            <script>
+                const ctx = document.getElementById('graficoProgreso').getContext('2d');
+                new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: {{ fechas_json | safe }},
+                        datasets: [{
+                            label: 'KG Máximos Levantados',
+                            data: {{ pesos_json | safe }},
+                            borderColor: '#1e90ff',
+                            backgroundColor: 'rgba(30, 144, 255, 0.2)',
+                            borderWidth: 3,
+                            pointBackgroundColor: '#ff4757',
+                            pointRadius: 5,
+                            fill: true,
+                            tension: 0.3 // Hace que la línea sea un poco curva y elegante
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        scales: {
+                            x: { ticks: { color: '#aaaaaa' }, grid: { color: '#333' } },
+                            y: { 
+                                ticks: { color: '#aaaaaa', stepSize: 2.5 }, 
+                                grid: { color: '#333' },
+                                beginAtZero: false // Para que el gráfico se centre en tus pesos reales
+                            }
+                        },
+                        plugins: { legend: { labels: { color: '#ffffff' } } }
+                    }
+                });
+            </script>
+        {% endif %}
+    </div>
+    </body></html>
+    """
+    return render_template_string(html, 
+                                  ejercicio=ejercicio, 
+                                  fechas=fechas, 
+                                  fechas_json=json.dumps(fechas), 
+                                  pesos_json=json.dumps(pesos))
 
 if __name__ == '__main__':
     app.run(debug=True)
