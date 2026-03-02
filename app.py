@@ -1,17 +1,29 @@
-import sqlite3
+import os
+import psycopg2
+from psycopg2.extras import DictCursor
 import json
 from flask import Flask, request, render_template_string, redirect, url_for
 from datetime import datetime
 
+# ⚠️ PEGA AQUÍ TU ENLACE DE NEON.TECH (Entre las comillas) ⚠️
+DATABASE_URL = "postgresql://tu_usuario:tu_contraseña@tu_host.neon.tech/neondb?sslmode=require"
+
 app = Flask(__name__)
 
-# --- INICIALIZACIÓN DE LA BASE DE DATOS ---
+# --- CONEXIÓN A POSTGRESQL ---
+def get_db():
+    conn = psycopg2.connect(DATABASE_URL)
+    return conn
+
+# --- INICIALIZACIÓN DE LA BASE DE DATOS (POSTGRESQL) ---
 def init_db():
-    conn = sqlite3.connect('gym_roberto.db')
+    conn = get_db()
     c = conn.cursor()
+    
+    # En PostgreSQL, AUTOINCREMENT se escribe como SERIAL
     c.execute('''
         CREATE TABLE IF NOT EXISTS ejercicios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             sesion TEXT,
             musculo TEXT,
             nombre TEXT,
@@ -20,7 +32,7 @@ def init_db():
     ''')
     c.execute('''
         CREATE TABLE IF NOT EXISTS registros (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             fecha TEXT,
             ejercicio_id INTEGER,
             serie INTEGER,
@@ -30,8 +42,11 @@ def init_db():
         )
     ''')
     
+    # Verificamos si la tabla está vacía para rellenarla con tu rutina
     c.execute('SELECT COUNT(*) FROM ejercicios')
-    if c.fetchone()[0] == 0:
+    count = c.fetchone()[0]
+    
+    if count == 0:
         ejercicios = [
             ('EMPUJE', 'PECTORAL', 'Press banca con barra', 3),
             ('EMPUJE', 'PECTORAL', 'Press banca inclinado en multipower', 3),
@@ -66,17 +81,13 @@ def init_db():
             ('ABDOMEN', 'ABDOMEN', 'Elevaciones de pierna colgado', 4),
             ('ABDOMEN', 'ABDOMEN', 'Crunch abdominal en banco inclinado', 4)
         ]
-        c.executemany('INSERT INTO ejercicios (sesion, musculo, nombre, series) VALUES (?, ?, ?, ?)', ejercicios)
+        # PostgreSQL usa %s en lugar de ? para las variables
+        c.executemany('INSERT INTO ejercicios (sesion, musculo, nombre, series) VALUES (%s, %s, %s, %s)', ejercicios)
         
     conn.commit()
     conn.close()
 
 init_db()
-
-def get_db():
-    conn = sqlite3.connect('gym_roberto.db')
-    conn.row_factory = sqlite3.Row
-    return conn
 
 # --- DISEÑO ---
 BASE_HTML = """
@@ -136,7 +147,7 @@ def index():
     <div class="container">
         <div class="header">
             <h1>Gym Tracker 🏋️‍♂️</h1>
-            <p>Programa de Roberto Priego</p>
+            <p>Programa de Roberto Priego (Nube ☁️)</p>
         </div>
         <a href="/sesion/EMPUJE" class="btn-sesion"><span>💪 EMPUJE</span> <span>➔</span></a>
         <a href="/sesion/TIRON" class="btn-sesion"><span>🔙 TIRON</span> <span>➔</span></a>
@@ -153,20 +164,21 @@ def index():
 @app.route('/sesion/<nombre>')
 def sesion(nombre):
     conn = get_db()
-    ejercicios = conn.execute('SELECT * FROM ejercicios WHERE sesion = ?', (nombre,)).fetchall()
+    c = conn.cursor(cursor_factory=DictCursor)
+    
+    c.execute('SELECT * FROM ejercicios WHERE sesion = %s', (nombre,))
+    ejercicios = c.fetchall()
     
     ultimos_registros = {}
     for ej in ejercicios:
-        regs = conn.execute('SELECT serie, kg, reps FROM registros WHERE ejercicio_id = ? ORDER BY id DESC LIMIT ?', (ej['id'], ej['series'])).fetchall()
+        c.execute('SELECT serie, kg, reps FROM registros WHERE ejercicio_id = %s ORDER BY id DESC LIMIT %s', (ej['id'], ej['series']))
+        regs = c.fetchall()
         if regs:
             regs_ordenados = sorted(regs, key=lambda x: x['serie'])
             ultimos_registros[ej['id']] = {r['serie']: f"{r['kg']}kg x {r['reps']} reps" for r in regs_ordenados}
             
     conn.close()
     
-    if not ejercicios:
-        return f"Sesión '{nombre}' no encontrada. Revisa la base de datos.", 404
-        
     html = BASE_HTML + """
     <body>
     <div class="container">
@@ -211,8 +223,11 @@ def sesion(nombre):
 @app.route('/guardar/<sesion_nombre>', methods=['POST'])
 def guardar(sesion_nombre):
     conn = get_db()
+    c = conn.cursor(cursor_factory=DictCursor)
     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
-    ejercicios = conn.execute('SELECT * FROM ejercicios WHERE sesion = ?', (sesion_nombre,)).fetchall()
+    
+    c.execute('SELECT * FROM ejercicios WHERE sesion = %s', (sesion_nombre,))
+    ejercicios = c.fetchall()
     
     for ej in ejercicios:
         for i in range(1, ej['series'] + 1):
@@ -221,9 +236,9 @@ def guardar(sesion_nombre):
             rir = request.form.get(f"rir_{ej['id']}_{i}")
             
             if kg and reps:
-                conn.execute('''
+                c.execute('''
                     INSERT INTO registros (fecha, ejercicio_id, serie, kg, reps, rir)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                 ''', (fecha_actual, ej['id'], i, float(kg), int(reps), int(rir) if rir else 0))
                 
     conn.commit()
@@ -233,7 +248,9 @@ def guardar(sesion_nombre):
 @app.route('/lista_progresos')
 def lista_progresos():
     conn = get_db()
-    ejercicios = conn.execute('SELECT * FROM ejercicios ORDER BY sesion, nombre').fetchall()
+    c = conn.cursor(cursor_factory=DictCursor)
+    c.execute('SELECT * FROM ejercicios ORDER BY sesion, nombre')
+    ejercicios = c.fetchall()
     conn.close()
     
     agrupados = {}
@@ -265,15 +282,19 @@ def lista_progresos():
 @app.route('/progreso/<int:ejercicio_id>')
 def ver_progreso(ejercicio_id):
     conn = get_db()
-    ejercicio = conn.execute('SELECT nombre, musculo FROM ejercicios WHERE id = ?', (ejercicio_id,)).fetchone()
+    c = conn.cursor(cursor_factory=DictCursor)
+    c.execute('SELECT nombre, musculo FROM ejercicios WHERE id = %s', (ejercicio_id,))
+    ejercicio = c.fetchone()
     
-    historial = conn.execute('''
-        SELECT substr(fecha, 1, 10) as dia, MAX(kg) as peso_maximo
+    # En PostgreSQL la función para extraer una parte del texto es SUBSTRING
+    c.execute('''
+        SELECT SUBSTRING(fecha, 1, 10) as dia, MAX(kg) as peso_maximo
         FROM registros
-        WHERE ejercicio_id = ? AND kg > 0
+        WHERE ejercicio_id = %s AND kg > 0
         GROUP BY dia
         ORDER BY dia ASC
-    ''', (ejercicio_id,)).fetchall()
+    ''', (ejercicio_id,))
+    historial = c.fetchall()
     conn.close()
     
     fechas = [fila['dia'] for fila in historial]
