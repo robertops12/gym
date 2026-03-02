@@ -118,7 +118,6 @@ BASE_HTML = """
         
         .ultimo-registro { font-size: 11px; color: var(--success); text-align: left; padding-left: 10px; margin-top: -5px; margin-bottom: 10px; display: block; }
         
-        /* Estilos para el menú de progreso */
         .grupo-musculo { margin-top: 20px; color: var(--primary); font-size: 14px; text-transform: uppercase; border-bottom: 1px solid #333; padding-bottom: 5px; }
         .link-progreso { display: block; padding: 12px; background: var(--card-bg); border-radius: 8px; margin-top: 8px; color: white; text-decoration: none; font-size: 15px; }
         .link-progreso:hover { background: #2c2c2c; }
@@ -160,12 +159,14 @@ def sesion(nombre):
     for ej in ejercicios:
         regs = conn.execute('SELECT serie, kg, reps FROM registros WHERE ejercicio_id = ? ORDER BY id DESC LIMIT ?', (ej['id'], ej['series'])).fetchall()
         if regs:
-            # Los ordenamos para que coincidan con la serie exacta (1, 2, 3...)
             regs_ordenados = sorted(regs, key=lambda x: x['serie'])
             ultimos_registros[ej['id']] = {r['serie']: f"{r['kg']}kg x {r['reps']} reps" for r in regs_ordenados}
             
     conn.close()
     
+    if not ejercicios:
+        return f"Sesión '{nombre}' no encontrada. Revisa la base de datos.", 404
+        
     html = BASE_HTML + """
     <body>
     <div class="container">
@@ -229,15 +230,12 @@ def guardar(sesion_nombre):
     conn.close()
     return redirect(url_for('index'))
 
-# --- NUEVAS RUTAS DE PROGRESIÓN ---
-
 @app.route('/lista_progresos')
 def lista_progresos():
     conn = get_db()
     ejercicios = conn.execute('SELECT * FROM ejercicios ORDER BY sesion, nombre').fetchall()
     conn.close()
     
-    # Agrupamos los ejercicios por sesión para el menú
     agrupados = {}
     for ej in ejercicios:
         if ej['sesion'] not in agrupados:
@@ -269,8 +267,6 @@ def ver_progreso(ejercicio_id):
     conn = get_db()
     ejercicio = conn.execute('SELECT nombre, musculo FROM ejercicios WHERE id = ?', (ejercicio_id,)).fetchone()
     
-    # Buscamos el peso MÁXIMO levantado cada día (agrupado por fecha)
-    # substr(fecha, 1, 10) extrae solo el 'YYYY-MM-DD' descartando la hora
     historial = conn.execute('''
         SELECT substr(fecha, 1, 10) as dia, MAX(kg) as peso_maximo
         FROM registros
@@ -294,7 +290,7 @@ def ver_progreso(ejercicio_id):
         
         {% if fechas|length < 2 %}
             <div style="text-align:center; margin-top: 50px; color: var(--text-muted);">
-                <p>🏋️‍♂️</p>
+                <p style="font-size: 30px;">🏋️‍♂️</p>
                 <p>Necesitas registrar este ejercicio al menos 2 días diferentes para ver tu gráfica de progreso.</p>
             </div>
         {% else %}
@@ -315,7 +311,7 @@ def ver_progreso(ejercicio_id):
                             pointBackgroundColor: '#ff4757',
                             pointRadius: 5,
                             fill: true,
-                            tension: 0.3 // Hace que la línea sea un poco curva y elegante
+                            tension: 0.3
                         }]
                     },
                     options: {
@@ -325,7 +321,7 @@ def ver_progreso(ejercicio_id):
                             y: { 
                                 ticks: { color: '#aaaaaa', stepSize: 2.5 }, 
                                 grid: { color: '#333' },
-                                beginAtZero: false // Para que el gráfico se centre en tus pesos reales
+                                beginAtZero: false
                             }
                         },
                         plugins: { legend: { labels: { color: '#ffffff' } } }
@@ -336,11 +332,7 @@ def ver_progreso(ejercicio_id):
     </div>
     </body></html>
     """
-    return render_template_string(html, 
-                                  ejercicio=ejercicio, 
-                                  fechas=fechas, 
-                                  fechas_json=json.dumps(fechas), 
-                                  pesos_json=json.dumps(pesos))
+    return render_template_string(html, ejercicio=ejercicio, fechas=fechas, fechas_json=json.dumps(fechas), pesos_json=json.dumps(pesos))
 
 if __name__ == '__main__':
     app.run(debug=True)
