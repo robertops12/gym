@@ -6,7 +6,7 @@ from flask import Flask, request, render_template_string, redirect, url_for
 from datetime import datetime
 
 # ⚠️ PEGA AQUÍ TU ENLACE DE NEON.TECH (Entre las comillas) ⚠️
-DATABASE_URL = "postgresql://tu_usuario:tu_contraseña@tu_host.neon.tech/neondb?sslmode=require"
+DATABASE_URL = "postgresql://neondb_owner:npg_0XekVGiv1cQC@ep-holy-fog-alcyg97y-pooler.c-3.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 
 app = Flask(__name__)
 
@@ -357,3 +357,4 @@ def ver_progreso(ejercicio_id):
 
 if __name__ == '__main__':
     app.run(debug=True)
+
